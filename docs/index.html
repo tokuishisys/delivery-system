@@ -1,0 +1,1437 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <base target="_top">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#198754">
+  <title>集配一元管理システム</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon-192.png">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js"></script>
+  <!-- PWA版：GASとの通信（google.script.run の置き換え）と連続QR読み取り -->
+  <script src="config.js"></script>
+  <script src="api.js"></script>
+  <script src="scanner.js"></script>
+  <style>
+    :root { --primary-color: #0d6efd; --success-color: #198754; --warning-color: #ffc107; --danger-color: #dc3545; }
+    body { background-color: #f0f2f5; font-family: -apple-system, "Helvetica Neue", Arial, sans-serif; padding-bottom: 50px; min-height: 100vh; }
+    .card { border-radius: 1rem; border: none; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08); overflow: hidden; }
+    .btn-main { height: 90px; font-weight: bold; border-radius: 1rem; margin-bottom: 1rem; border: 1px solid #dee2e6; transition: all 0.2s; display: flex; flex-direction: column; align-items: center; justify-content: center; width: 100%; text-decoration: none; box-shadow: 0 2px 4px rgba(0,0,0,0.05); color: inherit; }
+    .btn-main:active { transform: scale(0.96); opacity: 0.9; }
+    .btn-text-white { color: #fff !important; }
+    .page-section { display: none; opacity: 0; }
+    .page-section.active { display: block !important; opacity: 1 !important; }
+    .loading-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(255,255,255,0.8); display: none; flex-direction: column; align-items: center; justify-content: center; z-index: 9999; }
+    
+    .qr-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; background: #fff; padding: 10px; }
+    .qr-sticker { border: 1px solid #333; display: flex; flex-direction: column; align-items: center; justify-content: center; background: white; border-radius: 8px; padding: 10px; page-break-inside: avoid; }
+    .qr-label-text { font-size: 10px; font-weight: bold; margin-top: 5px; color: #000; text-align: center; }
+    .individual-ticket { border: 2px solid #000; padding: 20px; max-width: 500px; margin: 20px auto; background: #fff; }
+    .quick-tag { font-size: 0.85rem; padding: 0.6rem 1.2rem; border-radius: 2rem; margin-right: 0.5rem; margin-bottom: 0.5rem; background: white; border: 1px solid #dee2e6; cursor: pointer; display: inline-block; }
+    .filter-bar { background: #fff; padding: 15px; border-radius: 1rem; margin-bottom: 15px; font-size: 0.85rem; box-shadow: 0 2px 6px rgba(0,0,0,0.05); }
+    .route-chip { display: inline-block; padding: 4px 12px; border-radius: 20px; border: 1px solid #0d6efd; color: #0d6efd; margin: 2px; cursor: pointer; font-size: 0.8rem; background: #fff; transition: all 0.2s; }
+    .route-chip.active { background: #0d6efd; color: #fff; }
+    .x-small { font-size: 0.75rem; color: #6c757d; font-weight: bold; display: block; margin-bottom: 2px; }
+
+    @media print {
+      @page { size: A4; margin: 0; } 
+      body { background-color: white; padding: 0; margin: 0; height: auto !important; }
+      .container { width: 100% !important; max-width: none !important; padding: 0 !important; margin: 0 !important; }
+      .no-print { display: none !important; } 
+      .page-section { display: none !important; }
+      .page-section.active.print-target { display: block !important; position: absolute; top: 0; left: 0; width: 100%; }
+      .individual-ticket { border: 2px solid #000; padding: 15px; max-width: 70%; margin: 0 auto; page-break-inside: avoid; }
+      .print-block { page-break-inside: avoid; border: 1px solid #000 !important; }
+      .table-bordered th, .table-bordered td { border-color: #000 !important; }
+      .qr-grid { gap: 2px; }
+    }
+
+    .qr-frame { display: inline-block !important; background: #fff !important; padding: 3px !important; border: 1px solid #000 !important; line-height: 0 !important; }
+    .qr-frame img { display: block !important; margin: 0 !important; padding: 0 !important; }
+  </style>
+</head>
+<body>
+
+  <div id="qr-reader" style="display: none;"></div>
+  <input type="file" id="nativeCameraInput" accept="image/*" capture="environment" style="display: none;">
+
+  <div id="loading" class="loading-overlay">
+    <div class="spinner-border text-primary mb-2"></div>
+    <div class="small fw-bold text-secondary">通信中...</div>
+  </div>
+
+  <div id="loginPage" class="page-section container py-5">
+    <div class="row justify-content-center">
+      <div class="col-md-5 text-center">
+        <div class="card p-4 shadow">
+          <h3 class="mb-4 fw-bold text-primary">集配システム Login</h3>
+          <div class="text-start">
+            <label class="small text-muted mb-1">スタッフID</label>
+            <input type="text" id="loginId" class="form-control form-control-lg mb-3">
+            <label class="small text-muted mb-1">パスワード</label>
+            <input type="password" id="loginPw" class="form-control form-control-lg mb-4">
+          </div>
+          <button onclick="login()" class="btn btn-primary btn-lg w-100 shadow-sm" style="border-radius:2rem;">ログイン</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="menuPage" class="page-section container py-4">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+      <div class="badge bg-white text-dark p-2 border shadow-sm rounded-pill px-3">👤 <span id="displayUser" class="fw-bold">---</span></div>
+      <button onclick="logout()" class="btn btn-sm btn-outline-danger rounded-pill px-3">終了</button>
+    </div>
+    
+    <div class="row g-3">
+      <div class="col-12"><button onclick="showFormPage('pickup')" class="btn btn-main btn-primary shadow btn-text-white"><span class="fs-4">🚐</span> クリニック集荷 (QR使用)</button></div>
+      <div class="col-12"><button onclick="showFormPage('innai_qr')" class="btn btn-main btn-success shadow btn-text-white"><span class="fs-4">📄</span> 院内依頼登録 (QR使用)</button></div>
+      <div class="col-12"><button onclick="showFormPage('dept')" class="btn btn-main btn-outline-success shadow"><span class="fs-4">🖨️</span> 院内依頼票発行 (用紙印刷)</button></div>
+      
+      <div class="col-12 mt-4"><h6 class="fw-bold text-secondary border-bottom pb-1">ステータス更新処理 (親QR・個別対応)</h6></div>
+      <div class="col-12"><button onclick="showUpdatePage('受付')" class="btn btn-main bg-white shadow text-primary" style="height: 70px;">📥 センター受付</button></div>
+      <div class="col-12 mb-3"><button onclick="showSortPage()" class="btn btn-main bg-white shadow text-primary border-primary" style="height: 65px; border-width: 2px;">📦 翌朝仕分け (センター保管品)</button></div>
+      <div class="col-4"><button onclick="showUpdatePage('配送中')" class="btn btn-main bg-white shadow text-warning" style="height: 70px; font-size: 0.9rem;">🚚 出発処理</button></div>
+      <div class="col-4"><button onclick="showUpdatePage('完了')" class="btn btn-main bg-white shadow text-info" style="height: 70px; font-size: 0.9rem;">📍 配送完了</button></div>
+      <div class="col-4"><button onclick="showUpdatePage('帰着済')" class="btn btn-main bg-white shadow text-success" style="height: 70px; font-size: 0.9rem;">🏁 帰着済</button></div>
+      
+      <div class="col-12 mt-2"><button onclick="showUpdatePage('保留')" class="btn btn-main bg-white shadow text-danger border-danger" style="height: 65px;">⚠️ 保留 / 持ち戻り (イレギュラー処理)</button></div>
+
+      <div class="col-12 mt-3"><button onclick="showListPage()" class="btn btn-main bg-white shadow">📋 配送確認表 (ソート＆親QR印刷)</button></div>
+      <div class="col-6"><button onclick="showBulkQRPage()" class="btn btn-main bg-white shadow border-0">🖨️ QR発行(事前)</button></div>
+      <div class="col-6"><button onclick="showQRManagePage()" class="btn btn-main btn-dark shadow text-white border-0">⚙️ 紐付管理</button></div>
+    </div>
+  </div>
+
+  <div id="formPage" class="page-section container py-3">
+    <div class="card p-3 shadow-sm no-print">
+      <h5 id="formTitle" class="fw-bold mb-3 text-center border-bottom pb-2">入力フォーム</h5>
+      <div class="form-check form-switch mb-3 no-print">
+        <input class="form-check-input" type="checkbox" id="emergencyToggle" onchange="toggleEmergencyMode()" style="transform: scale(1.3); margin-left: -1.5em; margin-right: 0.5em;"checked>
+        <label class="form-check-label fw-bold text-danger" for="emergencyToggle">🚨 緊急回収モード（ルート内直配 / センター預かり）</label>
+      </div>
+
+      <div id="emergencySection" style="display: none;" class="p-3 bg-danger bg-opacity-10 rounded border border-danger mb-4">
+        <p class="small text-danger fw-bold mb-2">※ 発送元はGPSから自動取得され、配送先は「ルート内直送(未定)」となります。</p>
+        
+        <div class="mb-3">
+          <label class="small fw-bold">📦 回収品目 <span class="text-danger">*</span></label>
+          <select id="emergencyItems" class="form-select"></select>
+        </div>
+        
+        <div class="mb-3">
+          <label class="small fw-bold">📝 備考（メモ / 任意）</label>
+          <input type="text" id="emergencyRemarks" class="form-control" placeholder="例：常温、割れ物、など">
+        </div>
+
+        <div class="mb-3">
+          <label class="small fw-bold">🏷️ 管理ラベル(QR) <span class="text-danger">*</span></label>
+          <div class="input-group">
+            <input type="text" id="emergencyQrInput" class="form-control border-danger" placeholder="手入力またはリーダーで読取">
+            <button class="btn btn-danger fw-bold" type="button" onclick="startEmergencyScanCamera()">📷 カメラ</button>
+          </div>
+        </div>
+
+        <button class="btn btn-danger w-100 fw-bold py-2 shadow-sm" type="button" onclick="processEmergencyScan(document.getElementById('emergencyQrInput').value)">
+          🚀 この内容で登録する
+        </button>
+      </div>
+
+      <div id="normalFormSection">
+
+        <div id="qrScanSection" class="mb-3 bg-light p-2 rounded border" style="display:none;">
+          <label class="small fw-bold text-secondary">管理ラベル(QR)</label>
+          <div class="input-group">
+            <input type="text" id="labelId" class="form-control" placeholder="手入力またはカメラで撮影" oninput="checkFormQrInput(this.value)">
+            <button class="btn btn-primary fw-bold" type="button" onclick="startScanner(function(t){ document.getElementById('labelId').value=t; checkFormQrInput(t); })">📷 カメラで読み取る</button>
+          </div>
+        </div>
+        
+        <div id="hospitalQrMasterSection" class="card mb-4 border-secondary shadow-sm" style="display:none;">
+          <div class="card-header bg-light fw-bold text-secondary d-flex justify-content-between align-items-center" style="font-size: 0.85rem; padding: 6px 12px;">
+            <span>📌 登録済みの固定紐付け一覧から選択</span>
+          </div>
+          <div class="card-body p-1">
+            <div class="table-responsive" style="max-height: 160px; overflow-y: auto;">
+              <table class="table table-sm table-striped table-hover align-middle mb-0" style="font-size: 0.8rem;">
+                <thead class="table-dark sticky-top"><tr><th>袋名 (ID)</th><th>発送元 ➔ 配送先</th><th>品名</th><th class="text-center">操作</th></tr></thead>
+                <tbody id="hospital-qr-master-tbody"><tr><td colspan="4" class="text-center text-muted p-2">読み込み中...</td></tr></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      
+        <form id="mainForm">
+          <input type="hidden" id="formMode">
+          <div class="mb-3">
+            <label class="small fw-bold text-secondary">発送元（カナ検索可）</label>
+            <div class="input-group">
+              <input list="senderList" id="senderInput" class="form-control" required placeholder="名前またはカナを入力">
+              <button type="button" id="senderGeoBtn" class="btn btn-outline-primary" onclick="selectNearest('senderInput')">📍</button>
+            </div>
+            <datalist id="senderList"></datalist>
+          </div>
+          <div class="mb-3">
+            <label class="small fw-bold text-secondary">配送先（カナ検索可）</label>
+            <input list="receiverList" id="receiverInput" class="form-control" required placeholder="名前またはカナを入力">
+            <datalist id="receiverList"></datalist>
+          </div>
+          <div class="mb-3">
+            <label class="small fw-bold text-secondary">内容物</label>
+            <input list="itemList" type="text" id="itemsInp" class="form-control mb-2" required placeholder="内容物を入力または選択">
+            <datalist id="itemList"></datalist>
+            <div id="itemTags" class="d-flex flex-wrap mt-2"></div>
+          </div>
+          <div class="mb-3">
+            <label class="small fw-bold text-secondary">備考</label>
+            <textarea id="remarksInput" class="form-control" rows="2"></textarea>
+          </div>
+          <button type="submit" class="btn btn-primary btn-lg w-100 shadow rounded-pill">登録を確定</button>
+        </form>
+      </div>
+      <button onclick="showPage('menuPage')" class="btn btn-link w-100 mt-2 text-secondary no-print">キャンセルして戻る</button>
+    </div>
+  </div>
+
+  <div id="updatePage" class="page-section container py-3 text-center">
+    <h4 id="updateTitle" class="fw-bold mb-3">ステータス更新</h4>
+    <div id="updateAlertInfo" class="alert alert-info small text-start shadow-sm"></div>
+
+    <div class="form-check form-switch d-flex justify-content-center mb-3">
+      <input class="form-check-input me-2" type="checkbox" id="batchModeToggle" onchange="toggleBatchMode()">
+      <label class="form-check-label fw-bold text-secondary" for="batchModeToggle">個別タグ連続読み取りモード</label>
+    </div>
+
+    <div id="globalRouteSettings" class="card p-3 mb-3 bg-light border" style="display:none;">
+      <label class="small fw-bold">📍 参照便（ルート自動選定用）</label>
+      <select id="timeSlotSelect" class="form-select form-select-sm"></select>
+    </div>
+    
+    <div class="mb-3">
+      <input type="text" id="manualScanInput" class="form-control form-control-lg mb-2" placeholder="QRコードID / 手入力" autocomplete="off" inputmode="url" autocorrect="off" autocapitalize="none">
+      <button id="updateScanBtn" onclick="startScanner(handleUpdateScan)" class="btn btn-primary btn-lg w-100 py-4 shadow mb-2">📷 カメラでQRを読み取る</button>
+    </div>
+
+    <div id="latestScanContainer" style="display:none;" class="text-start"></div>
+
+    <div id="singleExecuteArea" style="display:none;" class="mb-3">
+      <button id="singleExecuteBtn" onclick="executeStatusUpdate()" class="btn btn-success btn-lg w-100 shadow rounded-pill py-3 fw-bold">更新確定</button>
+    </div>
+
+    <div id="batchArea" class="card p-3 mb-4 text-start shadow border-success" style="display:none;">
+      <div class="d-flex justify-content-between align-items-center mb-2">
+        <span class="fw-bold text-success">読み取りリスト（一括処理対象）</span>
+        <span class="badge bg-success" id="batchCount">0件</span>
+      </div>
+      <div id="batchList" class="border p-2 rounded mb-3 bg-light" style="min-height: 60px; max-height: 250px; overflow-y: auto;"></div>
+      <button onclick="executeBatchUpdate()" class="btn btn-success btn-lg w-100 shadow rounded-pill py-3 fw-bold" id="batchSubmitBtn" style="display:none;">一括更新を実行する</button>
+    </div>
+
+    <button onclick="showPage('menuPage')" class="btn btn-link text-secondary">メニューに戻る</button>
+  </div>
+
+  <div id="printTicketPage" class="page-section container py-3 print-target">
+    <div class="individual-ticket" id="ticketBody"></div>
+    <div class="no-print mt-4 d-grid gap-3"><button onclick="window.print()" class="btn btn-dark btn-lg shadow-sm">🖨️ 印刷する</button><button onclick="showFormPage('dept')" class="btn btn-outline-success btn-lg bg-white">📄 続けて発行する</button><button onclick="showPage('menuPage')" class="btn btn-secondary mt-2">メニューに戻る</button></div>
+  </div>
+
+  <div id="listPage" class="page-section container py-3 print-target">
+    <div class="no-print d-flex justify-content-between align-items-center mb-3">
+      <h5 class="fw-bold mb-0">📋 配送確認表</h5>
+      <button onclick="refreshListData()" class="btn btn-sm btn-outline-primary rounded-pill">🔄 更新</button>
+    </div>
+    
+    <div class="filter-bar no-print">
+      <div class="row g-2 mb-3">
+        <div class="col-4 col-md-3">
+          <label class="x-small">区分 (院外/院内)</label>
+          <select id="filterKbn" class="form-select form-select-sm" onchange="applyFilters()">
+            <option value="">すべて</option>
+            <option value="クリニック">クリニック(院外)</option>
+            <option value="院内">院内配送用</option>
+          </select>
+        </div>
+        <div class="col-4 col-md-2">
+          <label class="x-small">対象日付</label>
+          <select id="filterDateType" class="form-select form-select-sm" onchange="applyFilters()">
+            <option value="0">登録日</option><option value="8">受付日</option>
+          </select>
+        </div>
+        <div class="col-4 col-md-2">
+          <label class="x-small">期間指定</label>
+          <select id="filterPeriod" class="form-select form-select-sm" onchange="toggleDateCustom()">
+            <option value="today">今日</option><option value="range">範囲指定</option><option value="all">すべて</option>
+          </select>
+        </div>
+        <div id="dateRangeInput" class="col-12 col-md-5" style="display:none;">
+          <div class="row g-1"><div class="col-6"><input type="date" id="dateStart" class="form-control form-control-sm" onchange="applyFilters()"></div><div class="col-6"><input type="date" id="dateEnd" class="form-control form-control-sm" onchange="applyFilters()"></div></div>
+        </div>
+      </div>
+      <div class="row g-2 mb-3">
+        <div class="col-6 col-md-4">
+          <label class="x-small">ステータス</label>
+          <select id="filterStatus" class="form-select form-select-sm" onchange="applyFilters()">
+            <option value="">すべて</option><option value="登録済み">登録済み</option><option value="受付">受付済</option><option value="配送中">配送中</option><option value="完了">完了 (現地着)</option><option value="帰着済">帰着・検収済</option><option value="院内完了">院内完了</option>
+          </select>
+        </div>
+        <div class="col-6 col-md-4"><label class="x-small">配送先・部署</label><input type="text" id="filterReceiver" class="form-control form-control-sm" placeholder="すべて" oninput="applyFilters()"></div>
+      </div>
+      <div class="row g-2 mb-2">
+        <div class="col-12"><label class="x-small">ルート区分で絞り込み</label><div id="routeCatContainer" class="d-flex flex-wrap mb-2"></div><label class="x-small">ルート名で絞り込み</label><div id="routeNameContainer" class="d-flex flex-wrap"></div></div>
+      </div>
+    </div>
+    
+    <div id="smartListContainer" class="bg-white"></div>
+    <div class="no-print mt-3"><button onclick="window.print()" class="btn btn-dark w-100 mb-2 py-3 fw-bold shadow">🖨️ ハイブリッド親QR付きで印刷</button><button onclick="showPage('menuPage')" class="btn btn-secondary w-100">戻る</button></div>
+  </div>
+
+  <div id="bulkQRPage" class="page-section container py-3 print-target">
+    <div class="no-print mb-3">
+      <h5 class="fw-bold">🖨️ 事前用QR発行</h5>
+      <div class="row g-2"><div class="col-8"><div class="input-group"><span class="input-group-text">発行数</span><input type="number" id="qrCount" class="form-control" value="35" min="1" max="100"></div></div><div class="col-4"><button onclick="generateBulkQR()" class="btn btn-primary w-100">生成</button></div></div>
+    </div>
+    <div id="qrPrintGrid" class="qr-grid"></div>
+    <div class="no-print mt-4 d-grid gap-2"><button onclick="window.print()" class="btn btn-dark btn-lg shadow-sm">🖨️ 印刷実行</button><button onclick="showPage('menuPage')" class="btn btn-secondary mt-2">戻る</button></div>
+  </div>
+
+  <div id="qrManagePage" class="page-section container py-4" style="display:none;">
+    <div class="card p-4 shadow-sm mb-4">
+      <h3 class="card-title mb-4 text-dark fw-bold">⚙️ QRコード固定紐付け管理</h3>
+      <div class="mb-4"><button type="button" class="btn btn-outline-primary w-100 py-3 mb-2 fw-bold" onclick="startScanner(handleQRManageScan)">📷 固定用QRコードをカメラで読み取る</button></div>
+      <form id="qrManageForm" onsubmit="event.preventDefault();">
+        <div class="mb-3"><label class="form-label fw-bold">QRコードID</label><input type="text" id="manageQrId" class="form-control" oninput="checkManualQrInput(this.value)" placeholder="QRをスキャンまたは手入力"></div>
+        <div class="mb-3"><label class="form-label fw-bold">袋・バッグの識別名</label><input type="text" id="manageBagName" class="form-control" placeholder="例：ふくろ1、青バッグA"></div>
+        <div class="mb-3">
+          <label class="form-label fw-bold">固定の発送元</label>
+          <input type="text" id="manageSender" class="form-control" list="manageSenderList">
+          <datalist id="manageSenderList"></datalist>
+        </div>
+        <div class="mb-3">
+          <label class="form-label fw-bold">固定の配送先</label>
+          <input type="text" id="manageReceiver" class="form-control" list="manageReceiverList">
+          <datalist id="manageReceiverList"></datalist>
+        </div>
+        <div class="mb-3">
+          <label class="form-label fw-bold">固定の送付物</label>
+          <input type="text" id="manageItem" class="form-control" list="manageItemList">
+          <datalist id="manageItemList"></datalist>
+        </div>
+        
+        <div class="mb-3"><label class="form-label fw-bold">固定の区分</label><select id="manageCategory" class="form-select"><option value="クリニック">クリニック</option><option value="院内">院内</option></select></div>
+        <div class="row g-2 mt-4"><div class="col-8"><button type="button" onclick="submitQRLink()" class="btn btn-success w-100 py-2 fw-bold">保存/更新</button></div><div class="col-4"><button type="button" onclick="removeQRLink()" class="btn btn-danger w-100 py-2 fw-bold">解除</button></div></div>
+      </form>
+    </div>
+    <div class="card p-3 shadow-sm">
+      <h5 class="fw-bold mb-3">現在の紐付け一覧</h5>
+      <div class="table-responsive"><table class="table table-sm table-striped" style="font-size:0.85rem;"><thead><tr><th>袋名</th><th>発送元</th><th>配送先</th><th>内容物</th><th>操作</th></tr></thead><tbody id="qrManageTableBody"></tbody></table></div>
+    </div>
+    <button onclick="showPage('menuPage')" class="btn btn-secondary w-100 mt-4 py-2 rounded-pill">メニューに戻る</button>
+  </div>
+
+  <div id="sortPage" class="page-section container py-3 text-center">
+    <h4 class="fw-bold mb-3">📦 センター保管品の仕分け</h4>
+    <div class="alert alert-info small text-start shadow-sm">
+      💡 「センター保管」状態になっている昨日の荷物をスキャンし、正式な配送先を割り当てます。
+    </div>
+    
+    <div class="mb-3">
+      <div class="input-group">
+        <input type="text" id="sortScanInput" class="form-control form-control-lg" placeholder="QRコード手入力 または リーダー">
+        <button onclick="startScanner(handleSortScan)" class="btn btn-primary fw-bold">📷 カメラ</button>
+      </div>
+    </div>
+
+    <div id="sortEditArea" class="card p-3 shadow-sm text-start border-primary" style="display:none; border-width: 2px;">
+      <div class="mb-1 text-muted small">■ 管理ID: <span id="sortQrIdLabel" class="fw-bold font-monospace text-dark"></span></div>
+      <div class="mb-3 text-muted small">■ 発送元: <span id="sortSenderLabel" class="fw-bold text-dark" style="font-size:1.1rem;"></span></div>
+      
+      <div class="mb-3">
+        <label class="small fw-bold text-primary">📍 正式な配送先を設定 <span class="text-danger">*</span></label>
+        <input list="sortReceiverList" id="sortReceiverInput" class="form-control form-control-lg border-primary" placeholder="配送先を選択または入力">
+        <datalist id="sortReceiverList"></datalist>
+      </div>
+      
+      <div class="mb-4">
+        <label class="small fw-bold">📦 内容物の修正 (必要なら)</label>
+        <input list="sortItemList" id="sortItemInput" class="form-control" placeholder="内容物を選択または入力">
+        <datalist id="sortItemList"></datalist>
+      </div>
+      
+      <button onclick="executeSort()" class="btn btn-success btn-lg w-100 shadow rounded-pill fw-bold py-3">仕分け完了 (ルートに乗せる)</button>
+    </div>
+    
+    <button onclick="showPage('menuPage')" class="btn btn-link mt-3 text-secondary">メニューに戻る</button>
+  </div>
+
+  <script>
+    var masterData = { clients: [], depts: [], items: [], routeHeaders: [], qrLinks: [] };
+    var systemRecords = [];
+    var currentUpdateType = "";
+    var currentScanData = null;
+    var selectedRouteCategory = null;
+    var selectedRouteName = null;
+    var isBatchMode = false;
+    var scannedReadyItems = [];
+    var html5QrCode = null;
+
+    document.addEventListener('DOMContentLoaded', function() {
+      var user = localStorage.getItem('app_user_name');
+      // 【PWA版】ログイン情報（セッション）が無ければ再ログイン
+      if (user && !AppAPI.hasSession()) { localStorage.removeItem('app_user_name'); user = null; }
+      if (user) {
+        document.getElementById('displayUser').innerText = user;
+        showPage('menuPage');
+        loadMasterData();
+      } else { showPage('loginPage'); }
+      document.getElementById('mainForm').onsubmit = handleFormSubmit;
+
+      // === 【修正】スキャナ入力自動送信の強化（1回で送信されるようにする） ===
+      var scanTimer = null;
+      var inputEl = document.getElementById('manualScanInput');
+
+      // 1. Enterキーが押されたときの処理 (keydownに変更してIME確定のEnterにも対応)
+      inputEl.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter' || e.keyCode === 13) {
+          e.preventDefault(); // 予期せぬ画面リロードや不具合を防ぐ
+          clearTimeout(scanTimer);
+          if (this.value.trim() !== '') {
+            handleUpdateScan(this.value);
+            this.value = '';
+          }
+        }
+      });
+
+      // 2. EnterがIMEに吸い込まれた場合や、スキャナにEnter設定がない場合のバックアップ自動送信
+      inputEl.addEventListener('input', function(e) {
+        clearTimeout(scanTimer);
+        var self = this;
+        if (self.value.trim() !== '') {
+          // スキャナから文字がダダダッと入力され、止まってから200ミリ秒後に自動で処理を実行
+          scanTimer = setTimeout(function() {
+            handleUpdateScan(self.value);
+            self.value = '';
+          }, 200); 
+        }
+      });
+    });
+
+
+
+  // 【PWA版】ポータルSSO連携は使用しないため削除しました
+
+
+    function showPage(id) {
+      document.querySelectorAll('.page-section').forEach(p => p.classList.remove('active'));
+      var target = document.getElementById(id);
+      if(target) target.classList.add('active');
+      if (id === 'updatePage') setTimeout(() => document.getElementById('manualScanInput').focus(), 300);
+      window.scrollTo(0, 0);
+    }
+    function showBulkQRPage() { showPage('bulkQRPage'); }
+    function setLoading(v) { document.getElementById('loading').style.display = v ? 'flex' : 'none'; }
+
+    function loadMasterData() {
+      google.script.run.withSuccessHandler(function(d) {
+        masterData = d; 
+        renderItemTags(); 
+        updateTimeSlotOptions();
+        setupGlobalDataLists(); 
+        if (d.qrLinks) { 
+          var currentMode = document.getElementById('formMode').value; 
+          renderHospitalQrMasterList(d.qrLinks, currentMode); 
+          renderQRManageTable(); 
+        }
+      }).getMasterData();
+    }
+
+    function setupGlobalDataLists(mode) {
+      var sL = document.getElementById('senderList');
+      var rL = document.getElementById('receiverList');
+      if(sL) sL.innerHTML = ""; 
+      if(rL) rL.innerHTML = "";
+      
+      var createOptions = function(list, datalist) {
+        if (!list || !datalist) return;
+        var html = '';
+        list.forEach(function(item) { 
+          var name = (typeof item === 'string') ? item : (item.name || item[0]); 
+          if(!name) return; 
+          var label = (item.kana) ? ' label="' + item.kana + '"' : ''; 
+          html += '<option value="' + name + '"' + label + '>'; 
+        });
+        datalist.innerHTML += html;
+      };
+      
+      if (mode === 'pickup') {
+        // ★修正: クリニック集荷画面の「配送元」は院外の配送先（clients）のみ表示
+        createOptions(masterData.clients, sL);
+        
+        // 配送先の表示順は現状維持（院内部署 ➔ 院外クリニック）
+        createOptions(masterData.depts, rL);
+        createOptions(masterData.clients, rL);
+      } else {
+        // ★修正: 院内依頼登録（QR発行・事前QR）の「配送元」は院内部署 ➔ 院外クリニック
+        createOptions(masterData.depts, sL);
+        createOptions(masterData.clients, sL)
+        // 配送先の表示順は現状維持（院外クリニック ➔ 院内部署）
+        createOptions(masterData.clients, rL);
+        createOptions(masterData.depts, rL);
+      }
+    }
+
+    function renderItemTags() {
+      var cont = document.getElementById('itemTags'); var iList = document.getElementById('itemList');
+      if(!masterData.items) return; if(cont) cont.innerHTML = ""; if(iList) iList.innerHTML = "";
+      var optionsHtml = "";
+      masterData.items.forEach(function(t) {
+        var val = (Array.isArray(t) ? t[0] : (t.name || t)); if(!val) return;
+        if(cont) { var s = document.createElement('span'); s.className = 'quick-tag'; s.innerText = val; s.onclick = function(){ document.getElementById('itemsInp').value = val; }; cont.appendChild(s); }
+        optionsHtml += '<option value="' + val + '">';
+      });
+      if(iList) iList.innerHTML = optionsHtml;
+    }
+    
+    function login() { 
+      var id = document.getElementById('loginId').value;
+      var pw = document.getElementById('loginPw').value;
+      if(!id || !pw) return; setLoading(true);
+      google.script.run.withSuccessHandler(function(res) {
+        setLoading(false); if(res.success) { localStorage.setItem('app_user_name', res.name); document.getElementById('displayUser').innerText = res.name; showPage('menuPage'); loadMasterData(); } else alert(res.message);
+      }).checkLogin(id, pw);
+    }
+    
+    function logout() { localStorage.removeItem('app_user_name'); AppAPI.clearSession(); location.reload(); }
+    
+    function selectNearest(targetId) { 
+      if(!navigator.geolocation) return;
+      setLoading(true);
+      navigator.geolocation.getCurrentPosition(function(pos) {
+        setLoading(false);
+        var lat = pos.coords.latitude, lng = pos.coords.longitude;
+        var minD = Infinity, nearest = null;
+        masterData.clients.forEach(function(c) {
+          if(c.lat && c.lng) {
+            var d = Math.hypot(c.lat - lat, c.lng - lng);
+            if(d < minD) { minD = d; nearest = c; }
+          }
+        });
+        if(nearest) {
+          document.getElementById(targetId).value = nearest.name;
+          alert("現在地から最も近い「" + nearest.name + "」を選択しました。");
+        }
+      }, function() { setLoading(false); alert("位置情報の取得に失敗しました。"); });
+    }
+    
+    function updateTimeSlotOptions() {
+      var s = document.getElementById('timeSlotSelect');
+      if(!s || !masterData.routeHeaders) return; s.innerHTML = "";
+      masterData.routeHeaders.forEach(function(h) { var o = document.createElement('option'); o.value = h; o.text = h; s.appendChild(o); });
+      if(new Date().getHours() >= 14 && masterData.routeHeaders.length > 1) s.selectedIndex = 1;
+    }
+
+    function showFormPage(m) {
+      document.getElementById('formMode').value = m; document.getElementById('mainForm').reset(); document.getElementById('labelId').value = "";
+      setupGlobalDataLists(m);
+      
+      // === 【追加・修正】緊急トグルの初期化と処理の自動実行 ===
+      var toggleEl = document.getElementById('emergencyToggle');
+      if (toggleEl) {
+        if (m === 'pickup') {
+          toggleEl.checked = true;  // クリニック集荷(院外)なら最初からON
+        } else {
+          toggleEl.checked = false; // 院内依頼なら最初からOFF
+        }
+        toggleEmergencyMode(); // フォームの表示/非表示を切り替え
+        toggleEl.dispatchEvent(new Event('change')); // 品目リスト生成イベントを強制的に走らせる
+      }
+      // ========================================================
+
+      if (m === 'pickup') {
+        document.getElementById('formTitle').innerText = '🚐 クリニック集荷登録 (QR使用)'; document.getElementById('qrScanSection').style.display = 'block';
+        document.getElementById('senderGeoBtn').style.display = 'inline-block';
+      } else if (m === 'innai_qr') {
+        document.getElementById('formTitle').innerText = '📄 院内依頼登録 (QR使用)';
+        document.getElementById('qrScanSection').style.display = 'block'; document.getElementById('senderGeoBtn').style.display = 'none';
+      } else { 
+        document.getElementById('formTitle').innerText = '🖨️ 院内依頼票発行 (用紙印刷)';
+        document.getElementById('qrScanSection').style.display = 'none'; document.getElementById('senderGeoBtn').style.display = 'none';
+      }
+      
+      showPage('formPage');
+      const hospitalSection = document.getElementById('hospitalQrMasterSection');
+      if (hospitalSection) {
+        if (m === 'pickup' || m === 'innai_qr') { hospitalSection.style.display = 'block';
+        if (masterData && masterData.qrLinks) renderHospitalQrMasterList(masterData.qrLinks, m); } 
+        else { hospitalSection.style.display = 'none';
+        }
+      }
+    }
+    
+    function handleFormSubmit(e) {
+      e.preventDefault();
+      var m = document.getElementById('formMode').value;
+      var getRealName = function(val) { var found = masterData.clients.find(c => c.name === val || c.kana === val);
+        if (!found) found = masterData.depts.find(d => d === val); return found ? (found.name || found) : val; };
+      var data = { mode: m, sender: getRealName(document.getElementById('senderInput').value), receiver: getRealName(document.getElementById('receiverInput').value), items: document.getElementById('itemsInp').value, remarks: document.getElementById('remarksInput').value, customId: document.getElementById('labelId').value, staff: localStorage.getItem('app_user_name') };
+      setLoading(true);
+      google.script.run.withSuccessHandler(function(id) {
+          setLoading(false); if (data.mode === 'dept') { renderTicket(data, id); showPage('printTicketPage'); } else { alert("登録しました: " + id); showFormPage(data.mode); }
+        }).withFailureHandler(function(err){ setLoading(false); alert("エラー: " + err); }).registerData(data);
+    }
+    
+    function renderTicket(d, id) { 
+      var body = document.getElementById('ticketBody');
+      body.innerHTML = '<div style="text-align:center; border-bottom:2px solid #000; margin-bottom:15px;"><h3 style="margin:5px 0;">院内配送依頼票</h3></div>' +
+        '<div style="display:flex; justify-content:space-between;"><div style="flex:1;">' +
+        '<div style="margin-bottom:10px;"><small>配送先：</small><div style="font-size:1.4rem; font-weight:bold; border-bottom:1px solid #ccc;">'+d.receiver+'</div></div>' +
+        '<div style="margin-bottom:10px;"><small>発送元：</small><div>'+d.sender+'</div></div>' +
+        '<div style="margin-bottom:10px;"><small>内容物：</small><div>'+d.items+'</div></div>' +
+        '</div><div style="width:120px; text-align:center;"><div id="qrTicket" style="margin-bottom:5px;"></div><div style="font-size:0.7rem; font-weight:bold;">'+id+'</div></div></div>' +
+        '<div style="margin-top:15px; border:1px solid #999; padding:8px; min-height:60px;"><small>備考：</small><div>'+(d.remarks||"なし")+'</div></div>';
+      setTimeout(function() { 
+        try {
+          var safeId = unescape(encodeURIComponent(id));
+          new QRCode(document.getElementById('qrTicket'), { text: safeId, width: 110, height: 110, correctLevel: QRCode.CorrectLevel.H }); 
+        } catch(e) { console.error("Ticket QR Error", e); }
+      }, 250);
+    }
+
+    // ================= スマート配送確認表 =================
+    function showListPage() { showPage('listPage'); refreshListData(); }
+    function refreshListData() { setLoading(true); google.script.run.withSuccessHandler(function(data) { setLoading(false); systemRecords = data; applyFilters(true); }).fetchSystemData(); }
+    function toggleDateCustom() { var val = document.getElementById('filterPeriod').value; document.getElementById('dateRangeInput').style.display = (val === 'range' ? 'block' : 'none'); applyFilters(); }
+    
+    function applyFilters(rebuildRouteList = false) {
+      var status = document.getElementById('filterStatus').value;
+      var kbnFilter = document.getElementById('filterKbn').value; var period = document.getElementById('filterPeriod').value;
+      var dateIdx = parseInt(document.getElementById('filterDateType').value); var start = document.getElementById('dateStart').value; var end = document.getElementById('dateEnd').value;
+      var rxFilter = document.getElementById('filterReceiver').value.trim();
+      var todayStr = new Date().toLocaleDateString('ja-JP', {year:'numeric', month:'2-digit', day:'2-digit'}).replace(/\//g, '/');
+      var baseFiltered = systemRecords.filter(function(r) {
+        if (!r[dateIdx]) return false;
+        var rDateStr = String(r[dateIdx]).split(" ")[0]; var dateObj = new Date(rDateStr); dateObj.setHours(0,0,0,0); 
+        var matchStatus = !status || r[12] === status; var matchKbn = !kbnFilter || String(r[15]).trim() === kbnFilter;
+        var matchDate = true;
+        if (period === 'today') { matchDate = rDateStr === todayStr; }
+        else if (period === 'range' && start && end) { var sDate = new Date(start); sDate.setHours(0,0,0,0); var eDate = new Date(end); eDate.setHours(23,59,59,999); matchDate = dateObj >= sDate && dateObj <= eDate; }
+        return matchStatus && matchDate && matchKbn;
+      });
+      if (rebuildRouteList) { var cats = new Set(); var rts = new Set();
+        baseFiltered.forEach(r => { if(r[13]) cats.add(r[13]); if(r[14]) rts.add(r[14]); }); updateRouteFilterButtons(Array.from(cats).sort(), Array.from(rts).sort());
+      }
+      var finalFiltered = baseFiltered.filter(function(r) { var matchCat = !selectedRouteCategory || r[13] === selectedRouteCategory; var matchRt = !selectedRouteName || r[14] === selectedRouteName; var matchRx = !rxFilter || (r[3] && String(r[3]).includes(rxFilter)); return matchCat && matchRt && matchRx; });
+      finalFiltered.sort(function(a, b) { var routeA = String(a[14] || ""); var routeB = String(b[14] || ""); if (routeA !== routeB) return routeA.localeCompare(routeB, 'ja'); var destA = String(a[3] || ""); var destB = String(b[3] || ""); if (destA !== destB) return destA.localeCompare(destB, 'ja'); return (new Date(a[6]).getTime() || 0) - (new Date(b[6]).getTime() || 0); });
+      renderSmartList(finalFiltered);
+    }
+    
+    function updateRouteFilterButtons(cats, rts) {
+      var catCont = document.getElementById('routeCatContainer');
+      var rtCont = document.getElementById('routeNameContainer'); catCont.innerHTML = ""; rtCont.innerHTML = "";
+      var allCat = document.createElement('div');
+      allCat.className = 'route-chip ' + (!selectedRouteCategory ? 'active' : ''); allCat.innerText = "すべて"; allCat.onclick = function() { selectedRouteCategory = null; applyFilters(true); }; catCont.appendChild(allCat);
+      var allRt = document.createElement('div'); allRt.className = 'route-chip ' + (!selectedRouteName ? 'active' : ''); allRt.innerText = "すべて";
+      allRt.onclick = function() { selectedRouteName = null; applyFilters(true); }; rtCont.appendChild(allRt);
+      cats.forEach(function(c) { if (!c) return; var btn = document.createElement('div'); btn.className = 'route-chip ' + (selectedRouteCategory === c ? 'active' : ''); btn.innerText = c; btn.onclick = function() { selectedRouteCategory = (selectedRouteCategory === c) ? null : c; applyFilters(true); }; catCont.appendChild(btn); });
+      rts.forEach(function(rt) { if (!rt) return; var btn = document.createElement('div'); btn.className = 'route-chip ' + (selectedRouteName === rt ? 'active' : ''); btn.innerText = rt; btn.onclick = function() { selectedRouteName = (selectedRouteName === rt) ? null : rt; applyFilters(true); }; rtCont.appendChild(btn); });
+    }
+
+    function renderSmartList(data) {
+      var container = document.getElementById('smartListContainer');
+      container.innerHTML = "";
+      if (data.length === 0) { 
+        container.innerHTML = '<div class="text-center p-4 text-muted">該当するデータがありません</div>';
+        return; 
+      }
+      
+      var groupedByRoute = {};
+      data.forEach(function(r) { 
+        var routeKey = (r[13] || "未設定便") + "|" + (r[14] || "未設定ルート"); 
+        if (!groupedByRoute[routeKey]) groupedByRoute[routeKey] = {}; 
+        var destKey = r[3] || "宛先不明"; 
+        if (!groupedByRoute[routeKey][destKey]) groupedByRoute[routeKey][destKey] = []; 
+        groupedByRoute[routeKey][destKey].push(r); 
+      });
+
+      var generateSafeQR = function(domEl, text, size) {
+        domEl.innerHTML = "";
+        domEl.style.display = "inline-block";
+        domEl.style.padding = "2px";
+        domEl.style.border = "1px solid #000";
+        domEl.style.background = "#fff";
+        var encodedText = encodeURIComponent(text);
+        new QRCode(domEl, { text: encodedText, width: size, height: size, correctLevel: QRCode.CorrectLevel.M });
+      };
+
+      for (const routeKey in groupedByRoute) {
+        var rParts = routeKey.split("|");
+        var slot = rParts[0]; var rName = rParts[1];
+        var rBlock = document.createElement('div');
+        rBlock.className = "print-block mb-4 p-3 bg-light border border-2 rounded shadow-sm";
+        
+        var routeQrText = "BATCH_ROUTE:" + slot + "|" + rName;
+        var headerDiv = document.createElement('div');
+        headerDiv.className = "d-flex justify-content-between align-items-center mb-2 border-bottom pb-2 border-dark";
+        headerDiv.innerHTML = `<div><h4 class="fw-bold mb-1">🚚 ルート確認表: ${rName} <span class="badge bg-primary fs-6">${slot}</span></h4><p class="mb-0 text-muted small">■ このQRをスキャン ➡ 出発時は「配送中」へ、帰着時は「帰着済」へ一括更新されます。</p></div>`;
+        var rQrContainer = document.createElement('div');
+        rQrContainer.style.cssText = "background:#fff; padding:5px; border:1px solid #000; text-align:center; ";
+        generateSafeQR(rQrContainer, routeQrText, 90);
+
+        headerDiv.appendChild(rQrContainer);
+        rBlock.appendChild(headerDiv);
+        container.appendChild(rBlock);
+
+        var dests = groupedByRoute[routeKey];
+        for (const destName in dests) {
+          var items = dests[destName];
+          var dBlock = document.createElement('div'); 
+          dBlock.className = "mb-4 ms-2 me-2"; 
+          var destQrText = "BATCH_DEST:" + slot + "|" + rName + "|" + destName;
+          
+          var dHeaderDiv = document.createElement('div');
+          dHeaderDiv.className = "d-flex justify-content-between align-items-end mb-1 mt-3";
+          dHeaderDiv.innerHTML = `<h5 class="fw-bold mb-0 border-start border-4 border-success ps-2">📍 ${destName} <small class="text-muted">（計 ${items.length}件）</small></h5>`;
+          
+          var dQrWrapper = document.createElement('div');
+          dQrWrapper.className = "d-flex align-items-center";
+          dQrWrapper.innerHTML = `<span class="small text-muted me-2 text-end lh-sm">現地/部署到着時<br>➡このQRをスキャン</span>`;
+          
+          var dQrContainer = document.createElement('div');
+          dQrContainer.style.cssText = "background:#fff; padding:3px; border:1px solid #000;";
+          generateSafeQR(dQrContainer, destQrText, 80);
+          
+          dQrWrapper.appendChild(dQrContainer);
+          dHeaderDiv.appendChild(dQrWrapper);
+          dBlock.appendChild(dHeaderDiv);
+          var tableHtml = `<table class="table table-sm table-bordered align-middle mb-0" style="font-size:0.85rem; background:#fff;"><thead class="table-dark text-center"><tr><th style="width:12%">時間</th><th style="width:25%">ID</th><th style="width:23%">依頼元</th><th style="width:25%">品名</th><th style="width:15%">状態</th></tr></thead>
+            <tbody>${items.map(i => `<tr><td class="text-center">${String(i[6]).split(" ")[1] || ""}</td><td class="font-monospace fw-bold text-center">${i[2]}</td><td>${i[1]}</td><td>${i[4]}</td><td class="text-center"><span class="badge ${i[12]==='完了'?'bg-success':(i[12]==='配送中'?'bg-warning text-dark':(i[12]==='院内完了'?'bg-info text-dark':'bg-secondary'))}">${i[12]}</span></td></tr>`).join("")}</tbody></table>`;
+          var tableWrapper = document.createElement('div');
+          tableWrapper.innerHTML = tableHtml;
+          dBlock.appendChild(tableWrapper);
+          
+          rBlock.appendChild(dBlock);
+        }
+      }
+    }
+
+    // ================= 更新ページ・連続＆一括処理 =================
+    function showUpdatePage(t) {
+      currentUpdateType = t;
+      var titles = { '受付': '📥 センター受付処理', '配送中': '🚚 配送出発処理', '完了': '📍 配送完了処理', '帰着済': '🏁 帰着・完了処理', '保留': '⚠️ 保留・持ち戻り処理' };
+      document.getElementById('updateTitle').innerText = titles[t] || 'ステータス更新';
+      document.getElementById('latestScanContainer').style.display = 'none';
+      document.getElementById('singleExecuteArea').style.display = 'none';
+      document.getElementById('manualScanInput').value = '';
+      
+      var alertBox = document.getElementById('updateAlertInfo');
+      if (alertBox) {
+        if (t === '受付') {
+          alertBox.innerHTML = '💡 <b>個別タグ（REQ-...）</b>を読み込んで受付を行います。<br>次々読み込む場合は「個別タグ連続読み取りモード」をONにしてください。';
+        } else if (t === '保留') {
+          alertBox.innerHTML = '💡 渡し忘れや不在などで持ち戻った荷物を<b>「保留」</b>にします。<br>処理時に理由を入力でき、QRが再利用可能になります。';
+        } else {
+          alertBox.innerHTML = '💡 <b>親QRコード</b>（BATCH_...）を読み込むと自動で一括処理されます。<br>個別タグ（REQ-...）を読む場合は「連続読み取り」をONにしてください。';
+        }
+      }
+
+      if (t === '受付') { document.getElementById('globalRouteSettings').style.display = 'block'; } 
+      else { document.getElementById('globalRouteSettings').style.display = 'none'; }
+
+      // 連続スキャンの最適化のため、事前に最新データを裏でロード
+      setLoading(true);
+      google.script.run.withSuccessHandler(function(data) {
+        setLoading(false);
+        systemRecords = data;
+      }).fetchSystemData();
+
+      var batchToggle = document.getElementById('batchModeToggle');
+      if (batchToggle) { batchToggle.checked = (t === '受付'); }
+      toggleBatchMode();
+      showPage('updatePage');
+    }
+
+    function toggleBatchMode() {
+      isBatchMode = document.getElementById('batchModeToggle').checked;
+      document.getElementById('batchArea').style.display = isBatchMode ? 'block' : 'none';
+      document.getElementById('latestScanContainer').style.display = 'none'; 
+      document.getElementById('singleExecuteArea').style.display = 'none'; 
+      scannedReadyItems = []; 
+      updateBatchUI();
+    }
+
+    function updateBatchUI() {
+      var listCont = document.getElementById('batchList');
+      var totalCount = scannedReadyItems.length;
+      document.getElementById('batchCount').innerText = totalCount + "件";
+      listCont.innerHTML = "";
+      if (totalCount === 0) {
+        listCont.innerHTML = '<div class="text-muted small p-2">読み取りデータはありません</div>';
+        document.getElementById('batchSubmitBtn').style.display = 'none';
+      } else {
+        var html = "";
+        scannedReadyItems.forEach(function(item, index) {
+          html += '<div class="d-flex justify-content-between align-items-center border-bottom py-1 mb-1">' +
+                    '<div class="small"><b>' + item.id + '</b><br><span class="text-muted" style="font-size:0.75rem;">' + item.summary + '</span></div>' +
+                    '<button class="btn btn-sm btn-outline-danger py-0 px-2" onclick="removeReadyItem(' + index + ')">×</button></div>';
+        });
+        listCont.innerHTML = html;
+        var btnLabel = currentUpdateType === '受付' ? '一括受付を実行する' : (currentUpdateType === '配送中' ? '一括で出発にする' : (currentUpdateType === '完了' ? '一括で完了にする' : '一括で帰着にする'));
+        document.getElementById('batchSubmitBtn').innerText = btnLabel;
+        document.getElementById('batchSubmitBtn').style.display = 'block';
+      }
+    }
+    function removeReadyItem(index) { scannedReadyItems.splice(index, 1); updateBatchUI(); }
+
+    function handleUpdateScan(rawId) {
+      if (!rawId) return;
+      var id = rawId;
+      try { id = decodeURIComponent(rawId.replace(/\+/g, " ")); } catch(e) {}
+
+      // 受付画面での親QRブロック安全装置
+      if (id.startsWith("BATCH_")) {
+        if (currentUpdateType === '受付') {
+          alert("❌ 受付画面ではルートごとの一括処理（親QR）は使用できません。\n個別の荷物タグ（REQ-...）を読み込んでください。");
+          clearScanInput();
+          return;
+        }
+        setLoading(true);
+        google.script.run.withSuccessHandler(function(res) {
+          setLoading(true);
+          if (res.success) {
+            alert(`✅ ${res.count}件の一括処理が完了しました！\n（対象: ${res.route} ${res.receiver||""}）`);
+            clearScanInput();
+            google.script.run.withSuccessHandler(function(data) { setLoading(false); systemRecords = data; }).fetchSystemData();
+          } else { setLoading(false); alert("❌ " + res.message); clearScanInput(); }
+        }).processBatchQR(id, localStorage.getItem('app_user_name'));
+        return;
+      }
+
+      findRecordAndProcess(id);
+    }
+
+    // ローカル＆サーバー連動型の超高速マッチング・処理判定関数
+    function findRecordAndProcess(id) {
+      var match = systemRecords.find(r => String(r[2]) === String(id));
+      if (match) {
+        processScanMatch(match);
+      } else {
+        setLoading(true);
+        google.script.run.withSuccessHandler(function(data) {
+          setLoading(false);
+          systemRecords = data;
+          var retryMatch = systemRecords.find(r => String(r[2]) === String(id));
+          if (retryMatch) { processScanMatch(retryMatch); } 
+          else { alert("❌ エラー: 依頼票データに未登録のIDです (" + id + ")"); clearScanInput(); }
+        }).withFailureHandler(function(err) { setLoading(false); alert("通信エラー: " + err); clearScanInput(); }).fetchSystemData();
+      }
+    }
+
+    function processScanMatch(match) {
+      var id = match[2];
+      var valid = false; var reqText = "";
+      if (currentUpdateType === '受付') { valid = (match[12] === '登録済み'); reqText = '登録済み'; }
+      else if (currentUpdateType === '配送中') { valid = (match[12] === '受付'); reqText = '受付済'; }
+      else if (currentUpdateType === '完了') { valid = (match[12] === '配送中' || match[12] === '受付'); reqText = '配送中または受付'; }
+      else if (currentUpdateType === '帰着済') { valid = (match[12] === '配送中' || match[12] === '完了'); reqText = '配送中または完了'; }
+      else if (currentUpdateType === '保留') { valid = (match[12] === '受付' || match[12] === '配送中' || match[12] === '完了'); reqText = '受付、配送中、または完了'; }
+      else { valid = true; }
+
+      if (!valid) {
+        alert("❌ 状態エラー\nID: " + id + "\n現在の状態は「" + match[12] + "」です。\n" + currentUpdateType + "処理を行うには、状態が「" + reqText + "」である必要があります。");
+        clearScanInput(); return;
+      }
+
+      if (isBatchMode && scannedReadyItems.some(function(q) { return q.id === id; })) {
+        alert("⚠️ すでに読み込み済みのIDです: " + id);
+        clearScanInput(); return;
+      }
+
+      // ルート自動判定およびスライド選定ロジック
+      var selectedSlot = document.getElementById('timeSlotSelect').value;
+      var client = masterData.clients.find(c => c.name === match[3]);
+      var finalCategory = ""; var finalRoute = "センター搬送";
+      
+      if (currentUpdateType === '受付' && client && masterData.routeHeaders) {
+        var startIndex = masterData.routeHeaders.indexOf(selectedSlot);
+        if (startIndex === -1) startIndex = 0;
+        for (var i = startIndex; i < masterData.routeHeaders.length; i++) {
+          var currentCategory = masterData.routeHeaders[i];
+          var routeName = client.routes[currentCategory];
+          if (routeName && routeName.trim() !== "") { finalCategory = currentCategory; finalRoute = routeName.trim(); break; }
+        }
+      }
+
+      // 【PC画面対応】超特大UIレンダリング (連続モードでも同様に機能)
+      var displayCont = document.getElementById('latestScanContainer');
+      displayCont.style.display = 'block';
+      
+      var html = '<div class="card p-4 mb-3 border-primary shadow" style="background: #fff; border-width: 3px !important;">';
+      html += '<div class="d-flex justify-content-between text-muted small fw-bold mb-2"><span>📢 直近の読取内容</span><span class="badge bg-dark fs-6">現在: ' + match[12] + ' ➔ 次: ' + currentUpdateType + '</span></div>';
+      
+      if (currentUpdateType === '受付') {
+        html += '<div class="text-secondary small fw-bold mb-1">■ 配送先 (宛先):</div>';
+        html += '<div style="font-size: 2.5rem; font-weight: 900; color: #d93025; line-height: 1.2; margin-bottom: 15px; border-bottom: 4px solid #d93025; padding-bottom: 5px;">' + match[3] + '</div>';
+        
+        html += '<div class="p-3 mb-2" style="background-color: #e8f0fe; border-radius: 12px; border: 3px solid #1a73e8;">';
+        html += '<div style="font-size: 1.2rem; color: #1a73e8; font-weight: bold; margin-bottom: 5px;">';
+        html += '適用ルート区分 (参照便): <span class="badge bg-primary fs-5 px-3">' + (finalCategory ? finalCategory : "対象なし(センター搬送)") + '</span>';
+        if (finalCategory && finalCategory !== selectedSlot) {
+          html += ' <span class="badge bg-danger fs-6 text-white ms-2 animate-flash">⚠️ ' + selectedSlot + ' にルートなしのためスライド適用</span>';
+        }
+        html += '</div>';
+        html += '<div style="font-size: 3.2rem; font-weight: 900; color: #1a73e8; line-height: 1.1;">' + finalRoute + '</div>';
+        html += '</div>';
+      } else {
+        html += '<div class="text-secondary small fw-bold mb-1">■ 配送先 (宛先):</div>';
+        html += '<div style="font-size: 2.2rem; font-weight: bold; color: #111; margin-bottom: 10px;">' + match[3] + '</div>';
+        html += '<div class="p-2 bg-warning bg-opacity-10 text-warning-dark border border-warning rounded mb-2 fs-4 fw-bold">運行ルート: ' + (match[14] || "センター搬送") + ' <span class="fs-6 text-muted">(' + (match[13] || "便指定なし") + ')</span></div>';
+      }
+      
+      // 内容物を表示
+      html += '<div class="p-2 bg-light border rounded mt-2 text-dark fs-4 mb-2"><b>内容物:</b> ' + match[4] + '</div>';
+      
+      // ★【追加】備考欄にデータがある場合のみ、目立つように表示する
+      if (match[5] && String(match[5]).trim() !== "") {
+        html += '<div class="p-2 bg-white border border-warning rounded mb-2 text-dark" style="font-size:1.1rem;"><b>📝 備考:</b> ' + match[5] + '</div>';
+      }
+      
+      html += '<div class="text-muted font-monospace mt-2 d-flex justify-content-between" style="font-size:0.85rem;"><span>管理ID: ' + id + '</span><span>発送元: ' + match[1] + '</span></div>';
+      html += '</div>';
+      
+      displayCont.innerHTML = html;
+
+      if (isBatchMode) {
+        // 連続モード：特大表示しつつ、バックグラウンドでリストに即自動追加
+        scannedReadyItems.push({ 
+          id: id, cat: finalCategory, rt: finalRoute, 
+          summary: match[1] + " ➔ " + match[3] + " [" + match[4] + "]" + (finalRoute ? " (" + finalRoute + ")" : "") 
+        });
+        updateBatchUI(); clearScanInput();
+      } else {
+        // 単発モード：単発用の確定ボタンエリアを可視化
+        currentScanData = match;
+        window.selectedCategoryForUpdate = finalCategory; window.selectedRouteForUpdate = finalRoute;
+        
+        var btnArea = document.getElementById('singleExecuteArea'); btnArea.style.display = 'block';
+        var btnLabel = currentUpdateType === '受付' ? '受付を確定する' : (currentUpdateType === '配送中' ? '出発(配送中)を確定する' : (currentUpdateType === '完了' ? '配送完了を確定する' : '帰着(完了)を確定する'));
+        document.getElementById('singleExecuteBtn').innerText = btnLabel;
+        clearScanInput();
+      }
+    }
+
+    function clearScanInput() {
+      var scanInput = document.getElementById('manualScanInput');
+      if (scanInput) { scanInput.value = ''; scanInput.focus(); }
+    }
+
+    // === 【上書き】単発のステータス更新処理（直送GPS特定対応版） ===
+    function executeStatusUpdate() {
+      var memo = "";
+      if (currentUpdateType === '保留') {
+        memo = prompt("保留（持ち戻り・渡し忘れ等）の理由を入力してください。\n※入力した内容は備考欄に記録されます。");
+        if (memo === null) return;
+      }
+      
+      var route = window.selectedRouteForUpdate || "";
+      var category = window.selectedCategoryForUpdate || "";
+      var qrId = currentScanData[2]; // スキャンされたID
+      var staff = localStorage.getItem('app_user_name') || "未ログイン";
+
+      // 「完了」系の処理、かつ対象が「ルート内直送」だった場合のアシスト
+      if (currentUpdateType === "完了" || currentUpdateType === "院内完了" || currentUpdateType === "帰着済") {
+        var receiver = currentScanData[3] || "";
+        
+        if (receiver === "" || receiver.indexOf("ルート内直送") !== -1 || receiver.indexOf("未定") !== -1) {
+          
+          setLoading(true);
+          // ルート内直送品であることを検知 ➔ GPSを取得
+          if (!navigator.geolocation) {
+            setLoading(false); 
+            alert("GPSが使えないため、手動で配送先を指定してください。");
+            promptReceiverOverride(qrId, currentUpdateType, staff, category, route, memo, "");
+            return;
+          }
+          
+          navigator.geolocation.getCurrentPosition(function(pos) {
+            var lat = pos.coords.latitude, lng = pos.coords.longitude;
+            var minD = Infinity, nearestFacility = "";
+            
+            // マスタから最も近い「配送先」を特定
+            if (masterData && masterData.clients) {
+              masterData.clients.forEach(function(c) {
+                if (c.lat && c.lng) {
+                  var d = Math.hypot(c.lat - lat, c.lng - lng);
+                  if (d < minD) { minD = d; nearestFacility = c.name; }
+                }
+              });
+            }
+            
+            setLoading(false);
+            // 確認と修正のポップアップステップへ
+            promptReceiverOverride(qrId, currentUpdateType, staff, category, route, memo, nearestFacility);
+            
+          }, function(err) {
+            setLoading(false); 
+            alert("GPS特定に失敗しました。手動で選択してください。");
+            promptReceiverOverride(qrId, currentUpdateType, staff, category, route, memo, "");
+          });
+          
+          return; // GPS処理に入るのでここで一旦抜ける
+        }
+      }
+      
+      // 通常の荷物（すでに配送先が決まっている、または完了以外のステータス）
+      executeStandardUpdate(qrId, currentUpdateType, staff, category, route, memo, null);
+    }
+
+    // === 【追加】配送先の目視確認・手動修正ポップアップ ===
+    function promptReceiverOverride(qrId, targetStatus, staff, category, route, memo, suggestedFacility) {
+      var msg = suggestedFacility 
+        ? "📍 GPS判定の結果、最寄りの施設は\n【 " + suggestedFacility + " 】です。\n\nこの施設に配送完了（上書き）しますか？"
+        : "📍 配送先が未定の直送品です。配送先の施設名を入力または選択してください。";
+        
+      if (suggestedFacility && confirm(msg)) {
+        // GPSの推測通りでOKの場合
+        executeStandardUpdate(qrId, targetStatus, staff, category, route, memo, { overrideReceiver: suggestedFacility });
+      } else {
+        // 違う施設の場合、またはGPSが空だった場合は、プロンプトで選ばせる
+        var selectText = "正しい配送先を以下から正確に入力（またはコピー）してください：\n\n";
+        var userInput = prompt(selectText, suggestedFacility || "");
+        if (userInput === null) return; // キャンセル時は処理中断
+        userInput = userInput.trim();
+        if (!userInput) { alert("配送先が空欄のため処理を中断しました。"); return; }
+        
+        executeStandardUpdate(qrId, targetStatus, staff, category, route, memo, { overrideReceiver: userInput });
+      }
+    }
+
+    // === 【追加】実際のGASへのステータス送信処理（共通） ===
+    function executeStandardUpdate(qrId, targetStatus, staff, category, route, memo, payload) {
+      setLoading(true);
+      google.script.run.withSuccessHandler(function(res) {
+        setLoading(false);
+        if (res && res.success === false) { 
+          alert("❌ エラー: " + res.message); 
+        } else { 
+          alert("✅ ステータスを更新しました。"); 
+          showUpdatePage(currentUpdateType); 
+        }
+      }).updateStatus(qrId, targetStatus, staff, route, category, memo, payload);
+    }
+
+    function executeBatchUpdate() {
+      if (scannedReadyItems.length === 0) return;
+      var memo = "";
+      if (currentUpdateType === '保留') {
+        memo = prompt("一括で保留にする理由を入力してください。\n※入力した内容はすべての荷物の備考欄に記録されます。");
+        if (memo === null) return;
+      }
+      if (!confirm(scannedReadyItems.length + "件を一括で「" + currentUpdateType + "」にしますか？")) return;
+      setLoading(true);
+      google.script.run.withSuccessHandler(function(res) {
+        setLoading(false);
+        if (res && res.errors && res.errors.length > 0) {
+          if (res.successCount > 0) alert(res.successCount + "件成功しましたが、以下は失敗しました。\n\n" + res.errors.join("\n"));
+          else alert("❌ すべて失敗しました:\n\n" + res.errors.join("\n"));
+        } else { alert(res.successCount + "件の「" + currentUpdateType + "」一括処理が完了しました"); }
+        scannedReadyItems = []; updateBatchUI(); showUpdatePage(currentUpdateType); 
+      }).bulkUpdateStatus(scannedReadyItems, currentUpdateType, localStorage.getItem('app_user_name'), memo);
+    }
+
+    // 【PWA版】カメラ映像からの自動読み取り
+    //  ・ステータス更新画面で「連続読み取り」ONのとき：閉じるまで次々読み取る
+    //  ・それ以外：1件読んだら自動で閉じる
+    function startScanner(callback) {
+      var continuous = (callback === handleUpdateScan && isBatchMode);
+      var title = (callback === handleUpdateScan && currentUpdateType) ? (currentUpdateType + ' のQR読み取り') : 'QR読み取り';
+      LiveScanner.open({
+        continuous: continuous,
+        title: title,
+        onScan: callback,
+        onPhoto: function () { startPhotoScanner(callback); }
+      });
+    }
+
+    // 従来の「写真を撮って読み取る」方式（カメラが使えない場合の予備）
+    function startPhotoScanner(callback) {
+      var fileInput = document.getElementById('nativeCameraInput'); fileInput.onchange = null;
+      fileInput.onchange = function(e) {
+        if (e.target.files && e.target.files.length > 0) {
+          var imageFile = e.target.files[0]; setLoading(true);
+          if (!html5QrCode) { html5QrCode = new Html5Qrcode("qr-reader"); }
+          html5QrCode.scanFile(imageFile, true).then(function(qrCodeMessage) { setLoading(false); if (typeof callback === 'function') callback(qrCodeMessage); fileInput.value = ''; }).catch(function(err) { setLoading(false); alert("❌ QRコードを読み取れませんでした。"); fileInput.value = ''; });
+        }
+      };
+      fileInput.click();
+    }
+    
+    function renderHospitalQrMasterList(qrLinksData, currentMode) { 
+      const tbody = document.getElementById('hospital-qr-master-tbody'); if (!tbody) return; tbody.innerHTML = '';
+      if (!qrLinksData || qrLinksData.length === 0) { tbody.innerHTML = '<tr><td colspan="4" class="text-center text-muted p-2">データなし</td></tr>'; return; }
+      let hasValidData = false;
+      for (let i = 0; i < qrLinksData.length; i++) {
+        const row = qrLinksData[i]; if (!row[0]) continue; 
+        const kbn = row[5] ? String(row[5]).trim() : '';
+        if (currentMode === 'pickup' && kbn !== 'クリニック') continue;
+        else if (currentMode === 'innai_qr' && kbn === 'クリニック') continue;
+        hasValidData = true; const qrId = String(row[0]).trim();
+        const bagName = row[1] ? String(row[1]).trim() : '---';
+        
+        // ★【修正ポイント】スプレッドシートの列と正しい番号を紐付けました
+        const sender = row[4] ? String(row[4]).trim() : '---';   // [4] = 固定の発送元
+        const receiver = row[2] ? String(row[2]).trim() : '---'; // [2] = 固定の配送先
+        const item = row[3] ? String(row[3]).trim() : '---';     // [3] = 固定の内容物
+        
+        const kbnText = kbn ? ` [${kbn}]` : '';
+        const tr = document.createElement('tr');
+        tr.innerHTML = `<td><strong>${bagName}${kbnText}</strong><br><small class="text-muted" style="font-size:0.7rem;">${qrId}</small></td>
+          <td><small>${sender}</small><br>➔ <small class="fw-bold">${receiver}</small></td><td>${item}</td>
+          <td class="text-center"><button type="button" class="btn btn-sm btn-primary py-0 px-2 fw-bold" style="font-size:0.75rem;" onclick="selectQrMasterForHospital('${qrId}', '${bagName}', '${sender}', '${receiver}', '${item}')">選択</button></td>`;
+        tbody.appendChild(tr);
+      }
+      if (!hasValidData) { const targetKbnName = (currentMode === 'pickup') ? 'クリニック' : '院内'; tbody.innerHTML = `<tr><td colspan="4" class="text-center text-muted p-2">「${targetKbnName}」区分の紐付けデータがありません。</td></tr>`; }
+    }
+
+    function selectQrMasterForHospital(qrId, bagName, sender, receiver, item) { 
+      const qrField = document.getElementById('labelId');
+      const senderField = document.getElementById('senderInput'); const receiverField = document.getElementById('receiverInput'); const itemField = document.getElementById('itemsInp');        
+      if (qrField) { qrField.value = qrId; }
+      if (senderField) { senderField.value = sender; }
+      if (receiverField) { receiverField.value = receiver; }
+      if (itemField) { itemField.value = item; }
+      alert('「' + bagName + '」の情報をセットしました。');
+    }
+    function generateBulkQR() { 
+      var count = parseInt(document.getElementById('qrCount').value);
+      if (isNaN(count) || count < 1 || count > 100) { alert("1〜100の間で入力してください。"); return; }
+      var grid = document.getElementById('qrPrintGrid'); grid.innerHTML = ""; var now = new Date();
+      var timeStr = now.getFullYear().toString() + (now.getMonth() + 1).toString().padStart(2, '0') + now.getDate().toString().padStart(2, '0') + "-" + now.getHours().toString().padStart(2, '0') + now.getMinutes().toString().padStart(2, '0') + now.getSeconds().toString().padStart(2, '0');
+      for (var i = 1; i <= count; i++) {
+        var uniqueId = "REQ-" + timeStr + "-" + i.toString().padStart(3, '0');
+        var sticker = document.createElement('div'); sticker.className = 'qr-sticker'; var qrDiv = document.createElement('div');
+        var label = document.createElement('div'); label.className = 'qr-label-text'; label.innerText = uniqueId; 
+        sticker.appendChild(qrDiv); sticker.appendChild(label); grid.appendChild(sticker);
+        new QRCode(qrDiv, { text: uniqueId, width: 100, height: 100, correctLevel: QRCode.CorrectLevel.M });
+      }
+    }
+
+    // ================= QRコード固定紐付け管理機能 =================
+    function showQRManagePage() { 
+      showPage('qrManagePage'); renderQRManageTable();
+      var sList = document.getElementById('manageSenderList'); var rList = document.getElementById('manageReceiverList'); var iList = document.getElementById('manageItemList');
+      if(sList) sList.innerHTML = ""; if(rList) rList.innerHTML = ""; if(iList) iList.innerHTML = "";
+      var sHtml = ""; var rHtml = ""; var iHtml = "";
+      if (masterData) {
+        if (masterData.depts) { masterData.depts.forEach(function(d) { sHtml += '<option value="' + d + '">'; rHtml += '<option value="' + d + '">'; }); }
+        if (masterData.clients) { masterData.clients.forEach(function(c) { var name = (typeof c === 'string') ? c : (c.name || c[0]); if(name) { sHtml += '<option value="' + name + '">'; rHtml += '<option value="' + name + '">'; } }); }
+        if (masterData.items) { masterData.items.forEach(function(t) { var val = (Array.isArray(t) ? t[0] : (t.name || t)); if(val) iHtml += '<option value="' + val + '">'; }); }
+      }
+      if(sList) sList.innerHTML = sHtml; if(rList) rList.innerHTML = rHtml; if(iList) iList.innerHTML = iHtml;
+    }
+    function handleQRManageScan(id) { document.getElementById('manageQrId').value = id; checkManualQrInput(id); }
+    function checkManualQrInput(val) {
+      if (!val) return; var match = null;
+      if (masterData.qrLinks) { match = masterData.qrLinks.find(r => String(r[0]) === String(val)); }
+      if (match) {
+        document.getElementById('manageBagName').value = match[1] || ""; document.getElementById('manageReceiver').value = match[2] || "";
+        document.getElementById('manageItem').value = match[3] || ""; document.getElementById('manageSender').value = match[4] || "";
+        document.getElementById('manageCategory').value = match[5] || "クリニック";
+      } else {
+        document.getElementById('manageBagName').value = ""; document.getElementById('manageSender').value = "";
+        document.getElementById('manageReceiver').value = ""; document.getElementById('manageItem').value = "";
+        document.getElementById('manageCategory').value = "クリニック";
+      }
+    }
+    // ================= 依頼登録フォーム用：QRからの自動展開機能 =================
+    function checkFormQrInput(val) {
+      if (!val) return;
+      
+      // マスタデータが存在する場合のみ処理
+      if (masterData && masterData.qrLinks) {
+        // 入力されたIDと一致する固定紐付けデータを探す
+        var match = masterData.qrLinks.find(r => String(r[0]) === String(val));
+        
+        // 一致するデータがあれば、各フィールドに展開する
+        if (match) {
+          // === 【追加】区分（カテゴリ）の検証 ===
+          var currentMode = document.getElementById('formMode').value;
+          var qrCategory = match[5] ? String(match[5]).trim() : '';
+
+          // クリニック集荷画面なのに「院内」用QRが読まれた場合
+          if (currentMode === 'pickup' && qrCategory === '院内') {
+            alert('❌ 区分エラー\nこのQRコードは「院内」用です。\nクリニック集荷画面では使用できません。');
+            document.getElementById('labelId').value = ""; // 入力欄をクリア
+            return; // ここで処理をストップし、展開させない
+          } 
+          // 院内依頼登録画面なのに「クリニック」用QRが読まれた場合
+          else if (currentMode === 'innai_qr' && qrCategory === 'クリニック') {
+            alert('❌ 区分エラー\nこのQRコードは「クリニック」用です。\n院内依頼登録画面では使用できません。');
+            document.getElementById('labelId').value = ""; // 入力欄をクリア
+            return; // ここで処理をストップし、展開させない
+          }
+          // ====================================
+
+          var senderField = document.getElementById('senderInput');
+          var receiverField = document.getElementById('receiverInput');
+          var itemField = document.getElementById('itemsInp');
+          
+          // [4]=発送元, [2]=配送先, [3]=内容物
+          if (senderField && match[4]) senderField.value = match[4];
+          if (receiverField && match[2]) receiverField.value = match[2];
+          if (itemField && match[3]) itemField.value = match[3];
+        }
+      }
+    }
+    function submitQRLink() {
+      var qrId = document.getElementById('manageQrId').value; var bagName = document.getElementById('manageBagName').value;
+      var sender = document.getElementById('manageSender').value; var receiver = document.getElementById('manageReceiver').value;
+      var item = document.getElementById('manageItem').value; var category = document.getElementById('manageCategory').value;
+      if(!qrId) { alert("QR IDを入力してください"); return; }
+      setLoading(true);
+      google.script.run.withSuccessHandler(function(res) { setLoading(false); if(res.success) { alert("保存しました"); loadMasterData(); showPage('menuPage'); } else { alert("エラー: " + res.message); } }).saveQRLink(qrId, bagName, receiver, item, sender, category);
+    }
+    function removeQRLink() {
+      var qrId = document.getElementById('manageQrId').value; if(!qrId) return; if(!confirm("本当に解除しますか？")) return;
+      setLoading(true);
+      google.script.run.withSuccessHandler(function(res) { setLoading(false); if(res.success) { alert("解除しました"); loadMasterData(); showPage('menuPage'); } else { alert("エラー: " + res.message); } }).deleteQRLink(qrId);
+    }
+    function renderQRManageTable() {
+      var tbody = document.getElementById('qrManageTableBody'); 
+      if(!tbody) return; 
+      tbody.innerHTML = "";
+      
+      if(!masterData.qrLinks || masterData.qrLinks.length === 0) { 
+        tbody.innerHTML = "<tr><td colspan='5' class='text-center p-3 text-muted'>紐付けデータがありません</td></tr>"; 
+        return; 
+      }
+      
+      masterData.qrLinks.forEach(function(row) {
+         if(!row[0]) return; 
+         var kbnText = row[5] ? ` <span class="badge bg-secondary" style="font-size:0.7rem;">${row[5]}</span>` : "";
+         var tr = document.createElement('tr');
+         
+         // 修正ポイント：ここの表示順を ヘッダー通りの番号 に修正しました。
+         // row[2]=配送先, row[3]=内容物, row[4]=発送元
+         tr.innerHTML = `<td>${row[1]||""}${kbnText}<br><small class="text-muted" style="font-size:0.7rem;">${row[0]}</small></td>
+           <td>${row[2]||""}</td><td>${row[3]||""}</td><td>${row[4]||""}</td>
+           <td><button type="button" class="btn btn-sm btn-outline-primary fw-bold" onclick="handleQRManageScan('${row[0]}')">編集</button></td>`;
+         tbody.appendChild(tr);
+      });
+    }
+    // === 【追加】通常フォームと緊急モードの表示切り替え ===
+    function toggleEmergencyMode() {
+      var isEmergency = document.getElementById('emergencyToggle').checked;
+      document.getElementById('emergencySection').style.display = isEmergency ? 'block' : 'none';
+      document.getElementById('normalFormSection').style.display = isEmergency ? 'none' : 'block';
+    }
+
+    // === 【修正】緊急モードに切り替えた際、マスタから品目の選択肢を生成する ===
+    document.getElementById('emergencyToggle').addEventListener('change', function() {
+      var emergencyItems = document.getElementById('emergencyItems');
+      
+      // まだ選択肢が作られておらず、マスタデータが存在する場合のみ生成
+      if (emergencyItems.options.length <= 1 && typeof masterData !== 'undefined' && masterData.items) {
+        emergencyItems.innerHTML = '<option value="">-- 品目を選択してください --</option>'; // 初期値をセット
+        
+        // 既存の品目マスタをループして選択肢（option）を追加
+        masterData.items.forEach(function(item) {
+          // マスタが配列形式かオブジェクト形式かを判別して文字を取得
+          var val = Array.isArray(item) ? item[0] : (item.name || item);
+          if (val) {
+            var opt = document.createElement('option');
+            opt.value = val;
+            opt.text = val;
+            emergencyItems.appendChild(opt);
+          }
+        });
+      }
+    });
+
+    // === 【修正】緊急モードに切り替えた際、マスタから品目の選択肢を生成する ===
+    // (この部分は前回と同じです。そのまま残すか上書きしてください)
+    document.getElementById('emergencyToggle').addEventListener('change', function() {
+      var emergencyItems = document.getElementById('emergencyItems');
+      if (emergencyItems.options.length <= 1 && typeof masterData !== 'undefined' && masterData.items) {
+        emergencyItems.innerHTML = '<option value="">-- 品目を選択してください --</option>';
+        masterData.items.forEach(function(item) {
+          var val = Array.isArray(item) ? item[0] : (item.name || item);
+          if (val) {
+            var opt = document.createElement('option');
+            opt.value = val; opt.text = val;
+            emergencyItems.appendChild(opt);
+          }
+        });
+      }
+      
+      // トグルON時に、リーダー読み取り用に入力欄へフォーカスを当てる
+      if (this.checked) {
+        setTimeout(function() { document.getElementById('emergencyQrInput').focus(); }, 300);
+      }
+    });
+
+    // === 【追加】緊急回収用：リーダー等でEnterキーが押された時の自動実行 ===
+    document.getElementById('emergencyQrInput').addEventListener('keydown', function(e) {
+      if (e.key === 'Enter' || e.keyCode === 13) {
+        e.preventDefault(); // 画面リロードを防ぐ
+        processEmergencyScan(this.value);
+      }
+    });
+
+    // === 【追加】緊急回収用：カメラを起動する関数 ===
+    function startEmergencyScanCamera() {
+      startScanner(function(qrId) {
+        if (!qrId) return;
+        document.getElementById('emergencyQrInput').value = qrId;
+        processEmergencyScan(qrId);
+      });
+    }
+
+    // === 【追加】緊急回収用：実際の登録・GPS取得・送信処理 ===
+    function processEmergencyScan(qrId) {
+      qrId = (qrId || "").trim();
+      if (!qrId) { alert("管理ラベル(QR)のIDを入力またはスキャンしてください。"); return; }
+      
+      var item = document.getElementById('emergencyItems').value;
+      if (!item) { alert("回収品目を選択してください。"); return; }
+      
+      var remarks = document.getElementById('emergencyRemarks').value.trim();
+
+      if (!navigator.geolocation) {
+        alert("❌ GPS（位置情報）が利用できません。"); return;
+      }
+
+      setLoading(true);
+      // GPS取得
+      navigator.geolocation.getCurrentPosition(function(pos) {
+        var lat = pos.coords.latitude, lng = pos.coords.longitude;
+        var minD = Infinity, nearestFacility = "不明な施設（GPSエラー）";
+        
+        if (masterData && masterData.clients) {
+          masterData.clients.forEach(function(c) {
+            if (c.lat && c.lng) {
+              var d = Math.hypot(c.lat - lat, c.lng - lng);
+              if (d < minD) { minD = d; nearestFacility = c.name; }
+            }
+          });
+        }
+
+        // 確認ポップアップ
+        var confirmMsg = "🚨 緊急回収を登録します\n\n" +
+                         "発送元: " + nearestFacility + "\n" +
+                         "品目: " + item + "\n" +
+                         "管理ID: " + qrId + "\n" +
+                         "備考: " + (remarks || "なし") + "\n\n" +
+                         "よろしいですか？";
+        
+        if (!confirm(confirmMsg)) { setLoading(false); return; }
+
+        // GASへ送信
+        var payload = {
+          customId: qrId,
+          sender: nearestFacility,
+          receiver: "ルート内直送(未定)",
+          items: item,
+          remarks: remarks + " [GPS緊急回収]",
+          staff: localStorage.getItem('app_user_name') || "未ログイン",
+          mode: "pickup",
+          autoStatus: "配送中"
+        };
+
+        google.script.run.withSuccessHandler(function(finalId) {
+          setLoading(false);
+          alert("✅ 緊急回収完了！\n管理ID: " + finalId + "\n【配送中】として記録しました。");
+          document.getElementById('emergencyToggle').checked = true;
+          toggleEmergencyMode();
+          document.getElementById('emergencyQrInput').value = ""; // 入力欄をクリア
+          showPage('menuPage');
+        }).registerQuickData(payload);
+        
+      }, function(err) {
+        setLoading(false); alert("❌ GPSの取得に失敗しました。");
+      });
+    }
+
+    // ================= 【追加】センター仕分け機能 =================
+    var currentSortQrId = "";
+
+    function showSortPage() {
+      document.getElementById('sortScanInput').value = '';
+      document.getElementById('sortEditArea').style.display = 'none';
+      
+      // マスタからプルダウンの選択肢を生成
+      var rList = document.getElementById('sortReceiverList');
+      var iList = document.getElementById('sortItemList');
+      if(rList) rList.innerHTML = ''; 
+      if(iList) iList.innerHTML = '';
+      
+      if (masterData) {
+        if(masterData.depts) masterData.depts.forEach(function(d) { rList.innerHTML += '<option value="' + d + '">'; });
+        if(masterData.clients) masterData.clients.forEach(function(c) { rList.innerHTML += '<option value="' + (c.name || c[0]) + '">'; });
+        if(masterData.items) masterData.items.forEach(function(i) { iList.innerHTML += '<option value="' + (i.name || i[0]) + '">'; });
+      }
+      
+      showPage('sortPage');
+      setTimeout(function() { document.getElementById('sortScanInput').focus(); }, 300);
+    }
+
+    // リーダーのEnterキー対応
+    document.getElementById('sortScanInput').addEventListener('keydown', function(e) {
+      if (e.key === 'Enter' || e.keyCode === 13) {
+        e.preventDefault(); handleSortScan(this.value);
+      }
+    });
+
+    function handleSortScan(qrId) {
+      qrId = (qrId || "").trim();
+      if(!qrId) return;
+      document.getElementById('sortScanInput').value = qrId;
+      setLoading(true);
+      
+      // 常に最新データを取得してステータスを確認
+      google.script.run.withSuccessHandler(function(data) {
+        setLoading(false);
+        systemRecords = data;
+        var match = systemRecords.find(function(r) { return String(r[2]) === String(qrId); });
+        
+        if (!match) { alert("❌ データが見つかりません。"); return; }
+        if (match[12] !== "センター保管") {
+          alert("❌ この荷物は「センター保管」状態ではありません。\n現在の状態: " + match[12]);
+          document.getElementById('sortScanInput').value = "";
+          return;
+        }
+        
+        // データを画面にセットして入力欄を表示
+        currentSortQrId = qrId;
+        document.getElementById('sortQrIdLabel').innerText = qrId;
+        document.getElementById('sortSenderLabel').innerText = match[1];
+        document.getElementById('sortReceiverInput').value = ""; // 意図的に空にして選択させる
+        document.getElementById('sortItemInput').value = match[4] || "";
+        
+        document.getElementById('sortEditArea').style.display = 'block';
+        document.getElementById('sortReceiverInput').focus();
+        
+      }).fetchSystemData();
+    }
+
+    function executeSort() {
+      var receiver = document.getElementById('sortReceiverInput').value.trim();
+      var item = document.getElementById('sortItemInput').value.trim();
+      if(!receiver) { alert("配送先を入力または選択してください。"); return; }
+      
+      setLoading(true);
+      google.script.run.withSuccessHandler(function(res) {
+        setLoading(false);
+        if(res.success) {
+          alert("✅ " + res.message);
+          showSortPage(); // 画面をリセットして次の読み込みへ
+        } else {
+          alert("❌ エラー: " + res.message);
+        }
+      }).assignFinalDestination(currentSortQrId, receiver, item, localStorage.getItem('app_user_name'));
+    }
+  </script>
+</body>
+</html>
